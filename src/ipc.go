@@ -2,60 +2,93 @@ package ipc
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net"
-	"os"
 	"strconv"
 )
 
+var (
+	ErrUnsupportedNetworkFormat error = errors.New("Unsupported Network format")
+)
+
 type IPC struct {
-	addr     string
-	network  string
-	listener *net.UnixListener
+	addr         string
+	network      string
+	unixlistener *net.UnixListener
+	listener     net.Listener
 }
 
-func CreateAddr(name string) string {
-	pid := strconv.Itoa(os.Getpid())
-
-	return "/tmp/" + name + "-" + pid + ".sock"
+func CreateAddr(ipaddr string, port int) string {
+	return ipaddr + ":" + strconv.Itoa(port)
 }
 
 func CreateIPC(network, addr string) (*IPC, error) {
 	switch network {
-	case "unix", "unixpacket":
+	case "unix", "unixpacket", "tcp":
 		return &IPC{addr: addr, network: network}, nil
 	default:
-		return &IPC{}, nil //ここエラー
+		return &IPC{}, ErrUnsupportedNetworkFormat
 	}
 }
 
 func (ipc *IPC) Listen() (err error) {
 
-	ipc.listener, err = net.ListenUnix(ipc.network, &net.UnixAddr{Name: ipc.addr})
+	switch ipc.network {
 
-	return err
+	case "unix", "unixpacket":
+		ipc.unixlistener, err = net.ListenUnix(ipc.network, &net.UnixAddr{Name: ipc.addr})
+		return err
+
+	case "tcp":
+		ipc.listener, err = net.Listen(ipc.network, ipc.addr)
+		return err
+
+	default:
+		return ErrUnsupportedNetworkFormat
+	}
+
 }
 
-func (ipc *IPC) Accept() (*net.UnixConn, error) {
+func (ipc *IPC) Accept() (net.Conn, error) {
 
-	return ipc.listener.AcceptUnix()
+	switch ipc.network {
+	case "unix", "unixpacket":
+		return ipc.unixlistener.Accept()
+
+	default:
+		return ipc.listener.Accept()
+	}
 }
 
 func (ipc *IPC) Addr() net.Addr {
-	return ipc.listener.Addr()
-}
 
-func (ipc *IPC) GetFile() (*os.File, error) {
-	return ipc.listener.File()
+	switch ipc.network {
+	case "unix", "unixpacket":
+		return ipc.unixlistener.Addr()
+	default:
+		return ipc.listener.Addr()
+	}
+
 }
 
 func (ipc *IPC) Close() {
 	ipc.addr = ""
 	ipc.network = ""
-	ipc.listener.Close()
+
+	switch ipc.network {
+	case "unix", "unixpacket":
+		ipc.unixlistener.Close()
+		break
+
+	default:
+		ipc.listener.Close()
+		break
+	}
+
 }
 
-func ReadAll(cnn *net.UnixConn) ([]byte, error) {
+func ReadAll(cnn net.Conn) ([]byte, error) {
 
 	var data bytes.Buffer
 
@@ -76,11 +109,4 @@ func ReadAll(cnn *net.UnixConn) ([]byte, error) {
 	}
 
 	return data.Bytes(), nil
-}
-
-func (ipc *IPC) UnixDial() (cnn *net.UnixConn, err error) {
-
-	cnn, err = net.DialUnix(ipc.network, nil, &net.UnixAddr{Name: ipc.addr})
-
-	return
 }
